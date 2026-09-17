@@ -147,6 +147,16 @@ Launch from Spotlight (`Cmd+Space` → "Sticky Notes") or from Launchpad. To uni
 
 ---
 
+## Self-hosted server
+
+This fork adds a container that serves the web app with notes stored on the server, one board per user signed in through a reverse proxy (Authentik). Multi-arch images are built by `.forgejo/workflows/build.yaml`. See [deploy/README.md](deploy/README.md).
+
+```bash
+DEFAULT_USER=me npm run serve
+```
+
+---
+
 ## Where your notes live
 
 | | Path |
@@ -154,6 +164,7 @@ Launch from Spotlight (`Cmd+Space` → "Sticky Notes") or from Launchpad. To uni
 | Linux | `~/.config/sticky-notes-canvas/notes.json` |
 | macOS | `~/Library/Application Support/sticky-notes-canvas/notes.json` |
 | Browser | `localStorage` key `stickies.all` |
+| Self-hosted server | `$DATA_DIR/users/<username>/notes.json` |
 
 The JSON format is identical across all three — copy the file from one machine to another and your notes come with it.
 

@@ -1,0 +1,130 @@
+# Reference manifests for the self-hosted Sticky Notes web build.
+# Read deploy/README.md first — especially "Authentication": the server
+# trusts the X-authentik-username header, so it must only be reachable
+# through the Authentik-protected ingress.
+#
+# Not included (depends on the cluster's Authentik and Traefik setup):
+# the Ingress / IngressRoute and the forward-auth Middleware.
+#
+#   kubectl apply -n <namespace> -f deploy/kubernetes.yaml
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: sticky-notes-data
+  labels:
+    app.kubernetes.io/name: sticky-notes
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sticky-notes
+  labels:
+    app.kubernetes.io/name: sticky-notes
+spec:
+  # Exactly one: notes are plain files, and the rev check is only atomic
+  # inside a single server process.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sticky-notes
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: sticky-notes
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: sticky-notes
+          image: git.lost-synapse.com/lostsynapse/stickynotescanvas:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: USER_HEADER
+              value: X-authentik-username
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: sticky-notes-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sticky-notes
+  labels:
+    app.kubernetes.io/name: sticky-notes
+spec:
+  selector:
+    app.kubernetes.io/name: sticky-notes
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+# Only the ingress controller may talk to the pod. Anything else in the
+# cluster could otherwise send its own X-authentik-username and read or
+# overwrite any user's notes. The selector matches k3s's bundled Traefik;
+# adjust it for another ingress controller.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sticky-notes
+  labels:
+    app.kubernetes.io/name: sticky-notes
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: sticky-notes
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: traefik
+      ports:
+        - port: http
