@@ -25,6 +25,9 @@ function useStickyStore(onImportRequest) {
   useEffect(() => { storeRef.current = store; }, [store]);
 
   const scheduleSave = useCallback((next) => {
+    // Self-hosted server (server/web-sync.js): it debounces, orders and
+    // retries writes itself, and sends the last one when the tab is hidden.
+    if (window.stickyServer) { window.stickyServer.save(next); return; }
     if (saveRef.current) clearTimeout(saveRef.current);
     saveRef.current = setTimeout(() => {
       if (window.stickyAPI) {
@@ -44,6 +47,8 @@ function useStickyStore(onImportRequest) {
       try {
         if (window.stickyAPI) {
           loaded = await window.stickyAPI.load();
+        } else if (window.stickyServer) {
+          loaded = await window.stickyServer.load();
         } else {
           loaded = JSON.parse(localStorage.getItem('stickies.all') ?? '{}');
         }
@@ -58,6 +63,26 @@ function useStickyStore(onImportRequest) {
     })();
     return () => { cancelled = true; };
   }, [scheduleSave]);
+
+  // Self-hosted server only: the notes were changed in another tab or on
+  // another device. The server's copy replaces ours, but this tab keeps its
+  // own viewport (unless its folder is gone), and the undo history goes —
+  // it describes a store that no longer exists.
+  useEffect(() => {
+    if (!window.stickyServer) return;
+    return window.stickyServer.onRemoteChange((data) => {
+      undoStackRef.current = [];
+      redoStackRef.current = [];
+      setStore(prev => {
+        const next = withDefaults(data);
+        if (!prev) return next;
+        next.view = prev.view;
+        next.drawer = prev.drawer;
+        if (next.folders[prev.cwd]) next.cwd = prev.cwd;
+        return next;
+      });
+    });
+  }, []);
 
   // Menu bar integration (Electron only): File → Export / Import.
   useEffect(() => {

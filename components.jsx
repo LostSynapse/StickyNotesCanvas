@@ -372,8 +372,9 @@ const MOBILE_BANNER_MAX_WIDTH = 640;
 function MobileDemoBanner() {
   // Electron build: never show. The preload script exposes window.stickyAPI,
   // which is the same signal the rest of the app uses to gate desktop-only
-  // behavior (see the browser/Electron branching in useStickyStore).
-  if (typeof window !== 'undefined' && window.stickyAPI) return null;
+  // behavior (see the browser/Electron branching in useStickyStore). Nor on
+  // a self-hosted server (window.stickyServer): that isn't a demo.
+  if (typeof window !== 'undefined' && (window.stickyAPI || window.stickyServer)) return null;
 
   const [narrow, setNarrow] = useState(
     () => typeof window !== 'undefined' && window.innerWidth <= MOBILE_BANNER_MAX_WIDTH
@@ -3084,7 +3085,9 @@ function StatusBar({T, tweaks, folderName, noteCount, folderCount, onOpenPrefs})
       <span style={{opacity:.4}}>·</span>
       <span>auto-saved</span>
       <span style={{opacity:.4}}>·</span>
-      <span title="This app only stores your notes locally on your device — no cloud sync, no account.">local only</span>
+      {window.stickyServer
+        ? <span title="Your notes are stored on the server this page came from, under your account.">on server</span>
+        : <span title="This app only stores your notes locally on your device — no cloud sync, no account.">local only</span>}
     </div>
   );
 }

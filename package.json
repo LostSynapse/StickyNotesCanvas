@@ -9,6 +9,7 @@
   "license": "MIT",
   "scripts": {
     "start": "electron .",
+    "serve": "node server/server.js",
     "test": "node --test tests/*.test.mjs",
     "test:e2e": "node --test tests-e2e/*.e2e.mjs",
     "build:icons": "node build-icons.mjs",

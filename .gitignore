@@ -1,5 +1,7 @@
 node_modules
 dist/
+# Notes written by a local `npm run serve`
+/data/
 *.tmp
 .DS_Store
 
