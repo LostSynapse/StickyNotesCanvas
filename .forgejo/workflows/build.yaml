@@ -1,0 +1,147 @@
+# Self-hosted web image: unit tests, a smoke test of the built image, then a
+# multi-arch (linux/amd64, linux/arm64) push to the Forgejo container registry.
+#
+# Required repository secrets:
+#   REGISTRY_USERNAME  registry user
+#   REGISTRY_PASSWORD  token with package write access
+#
+# Image: git.lost-synapse.com/<owner>/<repo>, lowercased
+#   :latest          every push to master
+#   :master          every push to master
+#   :sha-<short>     every push
+#   :X.Y.Z :X.Y :X   v*.*.* tags
+#
+# While this directory exists Forgejo ignores .github/workflows, so upstream's
+# Electron release workflows never run here.
+name: build
+
+on:
+  push:
+    branches:
+      - master
+    tags:
+      - 'v*.*.*'
+  pull_request:
+    branches:
+      - master
+  workflow_dispatch:
+
+enable-email-notifications: true
+
+env:
+  REGISTRY: git.lost-synapse.com
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+
+      # Node-only tests: no npm install, so no Electron download.
+      - name: Unit tests
+        run: node --test tests/*.test.mjs
+
+  image:
+    name: Build, smoke test and push image
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      # No QEMU: the Dockerfile has no RUN step in the target stage, so every
+      # platform builds natively.
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+        with:
+          driver-opts: network=host
+
+      - name: Build for the runner's platform
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          tags: sticky-notes-canvas:smoke
+          cache-from: type=gha
+
+      # Checks the parts unit tests can't: the image starts, finds the app
+      # files, injects web-sync.js, and the nonroot user can write /data.
+      - name: Smoke test
+        run: |
+          docker run -d --name smoke -e DEFAULT_USER=ci sticky-notes-canvas:smoke
+          trap 'docker logs smoke; docker rm -f smoke > /dev/null' EXIT
+          docker exec -i smoke /nodejs/bin/node --input-type=module - <<'EOF'
+          const base = 'http://127.0.0.1:8080';
+          for (let i = 0; ; i++) {
+            try { if ((await fetch(`${base}/healthz`)).ok) break; } catch {}
+            if (i === 40) throw new Error('never became healthy');
+            await new Promise(r => setTimeout(r, 250));
+          }
+          const page = await (await fetch(`${base}/`)).text();
+          if (!page.includes('web-sync.js')) throw new Error('index.html was served without web-sync.js');
+          for (const p of ['/app.jsx', '/web-sync.js', '/vendor/babel.min.js', '/assets/fonts/inter-400.woff2']) {
+            const res = await fetch(base + p);
+            if (!res.ok) throw new Error(`${p} returned ${res.status}`);
+          }
+          const put = await fetch(`${base}/api/notes`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json', 'If-Match': '"0"' },
+            body: JSON.stringify({ notes: [{ id: 'smoke' }] }),
+          });
+          if (put.status !== 200) throw new Error(`PUT /api/notes returned ${put.status}: ${await put.text()}`);
+          const { data } = await (await fetch(`${base}/api/notes`)).json();
+          if (data.notes?.[0]?.id !== 'smoke') throw new Error('notes did not round-trip');
+          console.log('smoke test passed');
+          EOF
+
+      - name: Image name
+        if: github.event_name != 'pull_request'
+        # Registry paths must be lowercase; the repository name is not.
+        run: echo "IMAGE=${REGISTRY}/$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
+
+      - name: Log in to container registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+
+      - name: Extract image metadata
+        if: github.event_name != 'pull_request'
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=branch
+            type=sha,prefix=sha-,format=short
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+
+      - name: Build and push multi-arch image
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: true
+          sbom: true

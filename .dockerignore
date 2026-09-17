@@ -1,0 +1,11 @@
+# Allowlist: only what the image copies. Keeps node_modules, dist/, .git and
+# the Electron packaging out of the build context.
+*
+!index.html
+!app.jsx
+!components.jsx
+!hooks.jsx
+!utils.jsx
+!vendor/
+!assets/
+!server/
